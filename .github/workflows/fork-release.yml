@@ -70,7 +70,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: llama-macos-${{ matrix.build }}
-          path: llama-${RELEASE_TAG}-bin-macos-${{ matrix.build }}.tar.gz
+          path: llama-${{ env.RELEASE_TAG }}-bin-macos-${{ matrix.build }}.tar.gz
           if-no-files-found: error
 
   ubuntu-cpu:
@@ -112,7 +112,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: llama-linux-${{ matrix.build }}
-          path: llama-${RELEASE_TAG}-bin-linux-${{ matrix.build }}.tar.gz
+          path: llama-${{ env.RELEASE_TAG }}-bin-linux-${{ matrix.build }}.tar.gz
           if-no-files-found: error
 
   windows-cpu:
@@ -147,7 +147,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: llama-windows-x64
-          path: llama-${RELEASE_TAG}-bin-windows-x64.zip
+          path: llama-${{ env.RELEASE_TAG }}-bin-windows-x64.zip
           if-no-files-found: error
 
   publish:
