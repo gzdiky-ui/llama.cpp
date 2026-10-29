@@ -1,0 +1,161 @@
+name: Fork build/release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布到的 Release 标签(例如 v1.0.1);留空则只构建、不发布"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name || 'dev' }}
+
+jobs:
+  macos-cpu:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - build: arm64
+            os: macos-latest
+            defines: "-DGGML_METAL_EMBED_LIBRARY=ON -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3"
+          - build: x64
+            os: macos-15-intel
+            defines: "-DGGML_METAL=OFF -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          cmake -B build \
+            ${{ matrix.defines }} \
+            -DGGML_NATIVE=OFF \
+            -DCMAKE_INSTALL_RPATH='@loader_path' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DLLAMA_BUILD_BORINGSSL=ON
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+
+      - name: Pack artifacts
+        run: |
+          cp LICENSE ./build/bin/
+          tar -czf "llama-${RELEASE_TAG}-bin-macos-${{ matrix.build }}.tar.gz" -C ./build/bin .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-macos-${{ matrix.build }}
+          path: llama-${RELEASE_TAG}-bin-macos-${{ matrix.build }}.tar.gz
+          if-no-files-found: error
+
+  ubuntu-cpu:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - build: x64
+            os: ubuntu-22.04
+          - build: arm64
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_NATIVE=OFF \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DGGML_RPC=ON \
+            -DLLAMA_BUILD_BORINGSSL=ON \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Test
+        run: |
+          ctest --test-dir build -L main --timeout 900 --output-on-failure
+
+      - name: Pack artifacts
+        run: |
+          cp LICENSE ./build/bin/
+          tar -czf "llama-${RELEASE_TAG}-bin-linux-${{ matrix.build }}.tar.gz" -C ./build/bin .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-linux-${{ matrix.build }}
+          path: llama-${RELEASE_TAG}-bin-linux-${{ matrix.build }}.tar.gz
+          if-no-files-found: error
+
+  windows-cpu:
+    runs-on: windows-2022
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Build
+        shell: cmd
+        run: |
+          cmake -B build -G "Ninja Multi-Config" ^
+            -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_OPENMP_FETCH=ON ^
+            -DLLAMA_BUILD_SERVER=ON ^
+            -DGGML_RPC=ON ^
+            -DBUILD_SHARED_LIBS=OFF ^
+            -DLLAMA_BUILD_BORINGSSL=ON
+          cmake --build build --config Release
+
+      - name: Pack artifacts
+        shell: powershell
+        run: |
+          $tag = $env:RELEASE_TAG
+          New-Item -ItemType Directory -Force staging | Out-Null
+          Copy-Item LICENSE staging/
+          Copy-Item build/bin/Release/* staging/
+          Compress-Archive -Path staging/* -DestinationPath "llama-$tag-bin-windows-x64.zip"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-windows-x64
+          path: llama-${RELEASE_TAG}-bin-windows-x64.zip
+          if-no-files-found: error
+
+  publish:
+    needs: [macos-cpu, ubuntu-cpu, windows-cpu]
+    if: success() && env.RELEASE_TAG != 'dev'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: llama-*
+          path: release/
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: llama.cpp ${{ env.RELEASE_TAG }}
+          body: |
+            llama.cpp fork 构建发布(CPU):
+            - macOS arm64 / x64 (Metal)
+            - Linux x64 / arm64
+            - Windows x64
+
+            由 GitHub Actions 构建,Ubuntu 构建通过 ctest 单元测试后发布。
+          files: release/llama-*
+          fail_on_unmatched: false
