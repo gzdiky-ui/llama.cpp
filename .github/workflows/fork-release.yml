@@ -18,7 +18,24 @@ env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name || 'dev' }}
 
 jobs:
+  resolve-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Resolve release tag
+        id: tag
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+        run: |
+          tag="$DISPATCH_TAG"
+          case "${GITHUB_REF}" in
+            refs/tags/*) [ -z "$tag" ] && tag="${GITHUB_REF#refs/tags/}" ;;
+          esac
+          echo "tag=$tag" >> "${GITHUB_OUTPUT}"
+
   macos-cpu:
+    needs: resolve-tag
     strategy:
       fail-fast: false
       matrix:
@@ -134,8 +151,8 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [macos-cpu, ubuntu-cpu, windows-cpu]
-    if: success() && env.RELEASE_TAG != 'dev'
+    needs: [resolve-tag, macos-cpu, ubuntu-cpu, windows-cpu]
+    if: success() && needs.resolve-tag.outputs.tag != ''
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
@@ -148,8 +165,8 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          name: llama.cpp ${{ env.RELEASE_TAG }}
+          tag_name: ${{ needs.resolve-tag.outputs.tag }}
+          name: llama.cpp ${{ needs.resolve-tag.outputs.tag }}
           body: |
             llama.cpp fork 构建发布(CPU):
             - macOS arm64 / x64 (Metal)
